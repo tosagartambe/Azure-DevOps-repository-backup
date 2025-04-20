@@ -34,7 +34,7 @@ Local backup is stored as:
 ```
   backups/ 
   ├── 20250418-1455/ 
-  │    └── ProjectName-20250418-1455/ 
+  │    ├── ProjectName-20250418-1455/ 
   │    │    ├── ProjectName-Repo1-20250418-1455.zip 
   │    │    └── ProjectName-Repo2-20250418-1455.zip
   │    └── Project2-20250418-1455/

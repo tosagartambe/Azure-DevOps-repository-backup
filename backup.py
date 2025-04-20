@@ -110,6 +110,43 @@ class AzureDevOpsBackup:
             logger.error(f"❌ Failed to fetch repos for {project}: {e}")
             return []
 
+    def backup_repo(self, project: str, repo: Dict[str, str], project_dir: str) -> None:
+        repo_name = repo["name"]
+        clone_url = repo["clone_url"]
+
+        repo_path_parts = clone_url.split(f"/{self.organization}/")
+        repo_path = f"/{self.organization}/{repo_path_parts[1]}" if len(repo_path_parts) > 1 else f"/{self.organization}/{project}/_git/{repo_name}"
+        pat_clone_url = f"https://:{self.pat_token}@dev.azure.com{repo_path}"
+
+        temp_clone_path = os.path.join(project_dir, f"{repo_name}.git")
+        zip_file_name = f"{project}-{repo_name}-{self.timestamp}.zip"
+        zip_file_path = os.path.join(project_dir, zip_file_name)
+
+        logger.info(f"📦 Repo: {repo_name} → {zip_file_name}")
+
+        # Add to manifest
+        self.manifest.append({
+            "project": project,
+            "repo": repo_name,
+            "zip_file": zip_file_name,
+            "path": zip_file_path,
+        })
+
+        if self.dry_run:
+            logger.info("🧪 [Dry Run] Skipping clone and zip.")
+            return
+
+        try:
+            subprocess.run(["git", "clone", "--mirror", pat_clone_url, temp_clone_path], check=True)
+            subprocess.run(["zip", "-r", zip_file_path, temp_clone_path], check=True)
+            logger.info(f"✅ Backup done: {zip_file_path}")
+            self.upload_backup(zip_file_path)
+        except subprocess.CalledProcessError as e:
+            logger.error(f"❌ Failed to backup {project}/{repo_name}: {e}")
+        finally:
+            if os.path.exists(temp_clone_path):
+                subprocess.run(["rm", "-rf", temp_clone_path])
+    
     def upload_backup(self, zip_file_path: str) -> None:
         """
         Uploads backup zip file to Azure Blob and AWS S3 using local folder structure like:
@@ -152,86 +189,6 @@ class AzureDevOpsBackup:
                 logger.info(f"🌩️ Uploaded to AWS S3: {cloud_path}")
             except Exception as e:
                 logger.error(f"❌ AWS upload failed for {cloud_path}: {e}")
-
-
-
-    def backup_repo(self, project: str, repo: Dict[str, str], project_dir: str) -> None:
-        repo_name = repo["name"]
-        clone_url = repo["clone_url"]
-
-        repo_path_parts = clone_url.split(f"/{self.organization}/")
-        repo_path = f"/{self.organization}/{repo_path_parts[1]}" if len(repo_path_parts) > 1 else f"/{self.organization}/{project}/_git/{repo_name}"
-        pat_clone_url = f"https://:{self.pat_token}@dev.azure.com{repo_path}"
-
-        temp_clone_path = os.path.join(project_dir, f"{repo_name}.git")
-        zip_file_name = f"{project}-{repo_name}-{self.timestamp}.zip"
-        zip_file_path = os.path.join(project_dir, zip_file_name)
-
-        logger.info(f"📦 Repo: {repo_name} → {zip_file_name}")
-
-        # Add to manifest
-        self.manifest.append({
-            "project": project,
-            "repo": repo_name,
-            "zip_file": zip_file_name,
-            "path": zip_file_path,
-        })
-
-        if self.dry_run:
-            logger.info("🧪 [Dry Run] Skipping clone and zip.")
-            return
-
-        try:
-            subprocess.run(["git", "clone", "--mirror", pat_clone_url, temp_clone_path], check=True)
-            subprocess.run(["zip", "-r", zip_file_path, temp_clone_path], check=True)
-            logger.info(f"✅ Backup done: {zip_file_path}")
-            self.upload_backup(zip_file_path)
-        except subprocess.CalledProcessError as e:
-            logger.error(f"❌ Failed to backup {project}/{repo_name}: {e}")
-        finally:
-            if os.path.exists(temp_clone_path):
-                subprocess.run(["rm", "-rf", temp_clone_path])
-
-    def run_backup(self):
-        success = True
-        error_message = ""
-
-        try:
-            projects = self.get_projects()
-            if not projects:
-                logger.warning("⚠️ No projects to back up.")
-                success = False
-                error_message = "No projects found."
-                return
-
-            for project in projects:
-                project_dir = os.path.join(self.backup_root, f"{project}-{self.timestamp}")
-                os.makedirs(project_dir, exist_ok=True)
-                print(f"📁 Created folder: {project_dir}")
-
-                repos = self.get_repos_by_project(project)
-                if not repos:
-                    print(f"⚠️ No repos found in {project}")
-                    continue
-
-                for repo in repos:
-                    print(f"📥 Backing up: {project}/{repo['name']}")
-                    self.backup_repo(project, repo, project_dir)
-
-            self.write_manifest()
-
-        except Exception as e:
-            success = False
-            error_message = str(e)
-            logger.exception("❌ Exception occurred during backup:")
-
-        finally:
-            # Always attempt email (success or failure)
-            self.send_email_notification(success=success, error_message=error_message)
-
-            if success:
-                self.delete_local_backup_folder()
-
 
     def write_manifest(self):
         manifest_file = os.path.join(self.backup_root, f"manifest-{self.timestamp}.json")
@@ -331,6 +288,49 @@ class AzureDevOpsBackup:
                 logger.info(f"📬 Email sent to {to_emails}")
         except Exception as e:
             logger.error(f"❌ Failed to send email: {e}")
+
+    def run_backup(self):
+        success = True
+        error_message = ""
+
+        try:
+            projects = self.get_projects()
+            if not projects:
+                logger.warning("⚠️ No projects to back up.")
+                success = False
+                error_message = "No projects found."
+                return
+
+            for project in projects:
+                project_dir = os.path.join(self.backup_root, f"{project}-{self.timestamp}")
+                os.makedirs(project_dir, exist_ok=True)
+                print(f"📁 Created folder: {project_dir}")
+
+                repos = self.get_repos_by_project(project)
+                if not repos:
+                    print(f"⚠️ No repos found in {project}")
+                    continue
+
+                for repo in repos:
+                    print(f"📥 Backing up: {project}/{repo['name']}")
+                    self.backup_repo(project, repo, project_dir)
+
+            self.write_manifest()
+
+        except Exception as e:
+            success = False
+            error_message = str(e)
+            logger.exception("❌ Exception occurred during backup:")
+
+        finally:
+            # Always attempt email (success or failure)
+            self.send_email_notification(success=success, error_message=error_message)
+
+            if success:
+                self.delete_local_backup_folder()
+
+
+
 
 
 
