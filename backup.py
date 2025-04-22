@@ -181,6 +181,7 @@ class AzureDevOpsBackup:
                 cwd=project_dir,
                 check=True
             )
+            logger.info(f"✅ Backup done: {zip_file_path}")
             self.upload_backup(zip_file_path)
 
             # Add to manifest
