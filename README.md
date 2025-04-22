@@ -165,3 +165,57 @@ Use `--keep-local` to override
 |AZURE_DEVOPS_PAT error | PAT expired or missing. Renew with correct scopes (read Git + project info)|
 
 
+---
+
+## 🔁 Restore Instructions
+
+If you need to restore a repository from the backup archive, follow these steps.
+
+### 📦 What’s Inside a Backup ZIP?
+
+Each `.zip` file contains a full **Git mirror** (`<repo>.git`) that includes:
+
+- All branches
+- Tags
+- Git history
+- Remotes
+
+Structure:
+
+```
+MyRepo-Project-20250422-1710.zip 
+  └── MyRepo.git/ 
+        ├── HEAD 
+        ├── config 
+        ├── refs/ 
+        └── objects/
+```
+
+### 🔄 Option 1: Restore to Azure DevOps (or any Git host)
+
+1. **Create a new, empty Git repo** in Azure DevOps or GitHub
+
+2. **Unzip the archive**
+
+```bash
+unzip MyRepo-Project-20250422-1710.zip
+```
+3. **Push to the new remote**
+```bash
+cd MyRepo.git
+git remote set-url origin https://dev.azure.com/<org>/<project>/_git/<new-repo-name>
+git push --mirror
+```
+✅ This preserves all branches, tags, remotes, and Git history.
+
+
+### 🔄 Option 2: Restore Locally as a Working Copy
+If you want to inspect the backup or start local development:
+```bash
+git clone MyRepo.git my-working-copy
+cd my-working-copy
+```
+This gives you a normal working repo checkout.
+
+### 🔐 Reminder
+Your backup contains full Git history — handle with care if sharing externally.

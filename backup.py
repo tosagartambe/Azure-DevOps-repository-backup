@@ -17,11 +17,37 @@ from email.utils import formatdate
 
 load_dotenv()
 # Logging setup
-logging.basicConfig(
-    level=logging.INFO,
-    format='[%(levelname)s] %(asctime)s - %(message)s',
+# Create logs directory if needed
+log_dir = os.path.join(os.getcwd(), "logs")
+os.makedirs(log_dir, exist_ok=True)
+
+# Dynamic log file based on timestamp
+timestamp = datetime.utcnow().strftime("%Y%m%d-%H%M")
+log_file = os.path.join(log_dir, f"backup-{timestamp}.log")
+
+# Setup log format
+formatter = logging.Formatter(
+    fmt='[%(levelname)s] %(asctime)s - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
+
+# File handler
+file_handler = logging.FileHandler(log_file)
+file_handler.setFormatter(formatter)
+file_handler.setLevel(logging.INFO)
+
+# Console handler
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(formatter)
+console_handler.setLevel(logging.INFO)
+
+# Logger config
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
+
+print(f"📃 Logs will be saved to: {log_file}")
 logger = logging.getLogger(__name__)
 
 
@@ -78,6 +104,24 @@ class AzureDevOpsBackup:
                 logger.error(f"❌ AWS S3 setup failed: {e}")
                 self.aws_backup = False
 
+    def log_config(self):
+        logger.info("📋 Backup Configuration:")
+        logger.info(f"   🏢 Organization    : {self.organization}")
+        logger.info(f"   🕒 Timestamp       : {self.timestamp}")
+        logger.info(f"   📁 Backup Root     : {self.backup_root}")
+        logger.info(f"   ☁️ Azure Upload    : {'Enabled' if self.azure_backup else 'Disabled'}")
+        logger.info(f"   ☁️ AWS Upload      : {'Enabled' if self.aws_backup else 'Disabled'}")
+        logger.info(f"   🔬 Dry Run         : {'Yes' if self.dry_run else 'No'}")
+        logger.info(f"   🧹 Keep Local      : {'Yes' if self.keep_local else 'No'}")
+
+        if self.excluded_projects:
+            logger.info(f"   🚫 Excluded Projects ({len(self.excluded_projects)}):")
+            for proj in sorted(self.excluded_projects):
+                logger.info(f"      - {proj}")
+        else:
+            logger.info("   ✅ No excluded projects.")
+
+    
     def get_projects(self) -> List[str]:
         logger.info("📡 Fetching projects...")
         url = f"{self.base_url}/_apis/projects?api-version=7.0"
@@ -124,13 +168,7 @@ class AzureDevOpsBackup:
 
         logger.info(f"📦 Repo: {repo_name} → {zip_file_name}")
 
-        # Add to manifest
-        self.manifest.append({
-            "project": project,
-            "repo": repo_name,
-            "zip_file": zip_file_name,
-            "path": zip_file_path,
-        })
+        
 
         if self.dry_run:
             logger.info("🧪 [Dry Run] Skipping clone and zip.")
@@ -138,9 +176,21 @@ class AzureDevOpsBackup:
 
         try:
             subprocess.run(["git", "clone", "--mirror", pat_clone_url, temp_clone_path], check=True)
-            subprocess.run(["zip", "-r", zip_file_path, temp_clone_path], check=True)
-            logger.info(f"✅ Backup done: {zip_file_path}")
+            subprocess.run(
+                ["zip", "-r", zip_file_path, os.path.basename(temp_clone_path)],
+                cwd=project_dir,
+                check=True
+            )
             self.upload_backup(zip_file_path)
+
+            # Add to manifest
+            self.manifest.append({
+                "project": project,
+                "repo": repo_name,
+                "zip_file": zip_file_name,
+                "path": zip_file_path,
+            })
+
         except subprocess.CalledProcessError as e:
             logger.error(f"❌ Failed to backup {project}/{repo_name}: {e}")
         finally:
@@ -223,7 +273,7 @@ class AzureDevOpsBackup:
         except Exception as e:
             logger.error(f"❌ Failed to delete local backup folder: {e}")
 
-    def send_email_notification(self, success: bool, error_message: str = ""):
+    def send_email_notification(self, success: bool, error_message: str = "", dry_run: bool = False):
         """
         Sends an email notification about backup result, and attaches the manifest.
         """
@@ -242,9 +292,14 @@ class AzureDevOpsBackup:
             f"☁️ AWS Upload: {'Yes' if self.aws_backup else 'No'}",
         ]
 
-        if success:
+        if dry_run:
+            subject = f"[Azure DevOps Backup] 🧪 Dry Run - {self.organization} @ {self.timestamp}"
+            body_lines.insert(0, "🧪 This was a dry run. No actual backups or uploads were performed.")
+        elif success:
+            subject = f"[Azure DevOps Backup] ✅ Success - {self.organization} @ {self.timestamp}"
             body_lines.insert(0, "✅ Backup completed successfully.")
         else:
+            subject = f"[Azure DevOps Backup] ❌ Failed - {self.organization} @ {self.timestamp}"
             body_lines.insert(0, "❌ Backup FAILED.")
             if error_message:
                 body_lines.append("")
@@ -294,6 +349,7 @@ class AzureDevOpsBackup:
         error_message = ""
 
         try:
+            self.log_config()
             projects = self.get_projects()
             if not projects:
                 logger.warning("⚠️ No projects to back up.")
@@ -324,14 +380,10 @@ class AzureDevOpsBackup:
 
         finally:
             # Always attempt email (success or failure)
-            self.send_email_notification(success=success, error_message=error_message)
+            self.send_email_notification(success=success, error_message=error_message, dry_run=self.dry_run)
 
             if success:
                 self.delete_local_backup_folder()
-
-
-
-
 
 
 def main():
